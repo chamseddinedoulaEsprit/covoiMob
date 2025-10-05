@@ -78,6 +78,8 @@ Remarque : adaptez le code dans `firebase/functions/index.js` et `api_manager.js
 
 ## Build & release
 
+### Build local
+
 - Android (APK) :
 
 ```sh
@@ -97,6 +99,30 @@ flutter build ios --release
 ```
 
 Vérifiez la configuration des keystores Android dans `android/` et des profils de provisioning pour iOS avant de publier.
+
+### CI/CD avec GitHub Actions
+
+Le projet inclut un workflow GitHub Actions (`.github/workflows/flutter_build.yml`) pour automatiser la construction et le déploiement de l'APK.
+
+#### Configuration des secrets GitHub (optionnel)
+
+Pour signer l'APK en mode release, configurez ces secrets dans votre dépôt GitHub (`Settings > Secrets and variables > Actions`) :
+
+- `KEYSTORE` : Keystore encodé en base64 (commande : `base64 -i your-keystore.jks`)
+- `STORE_PASSWORD` : Mot de passe du keystore
+- `KEY_PASSWORD` : Mot de passe de la clé
+- `KEY_ALIAS` : Alias de la clé
+
+Si ces secrets ne sont pas configurés, le workflow créera un keystore de debug automatiquement.
+
+#### Déclenchement du workflow
+
+Le workflow se déclenche :
+
+- Automatiquement lors d'un push sur la branche `main`
+- Manuellement via l'onglet "Actions" de GitHub (workflow_dispatch)
+
+L'APK généré sera disponible en tant qu'artifact dans la section Actions de GitHub.
 
 ## Tests
 
