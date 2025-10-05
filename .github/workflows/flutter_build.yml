@@ -356,27 +356,63 @@ jobs:
       - name: Clear Flutter cache
         run: flutter clean
 
-      - name: Fix pubspec dependencies conflicts
+      - name: Diagnose and fix dependencies
         run: |
-          echo "Résolution des conflits de dépendances..."
-          # Forcer la mise à jour des dépendances pour résoudre les conflits de version
-          flutter pub upgrade --major-versions || echo "Upgrade failed, trying alternative approach"
+          echo "=== Diagnostic du projet Flutter ==="
           
-          # Si l'upgrade échoue, essayer pub get avec force resolve
-          if ! flutter pub get; then
-            echo "pub get failed, trying to fix collection version conflict..."
-            # Modifier temporairement pubspec.yaml pour forcer une version compatible
-            if grep -q "collection:" pubspec.yaml; then
-              sed -i 's/collection: [0-9.]\+/collection: ^1.19.1/' pubspec.yaml
-            else
-              # Ajouter collection si pas présent
-              echo "  collection: ^1.19.1" >> pubspec.yaml
-            fi
-            flutter pub get
+          # Vérifier la structure du projet
+          echo "Structure du projet:"
+          ls -la
+          
+          # Vérifier pubspec.yaml
+          echo ""
+          echo "=== Contenu de pubspec.yaml ==="
+          cat pubspec.yaml
+          
+          # Vérifier la version de Flutter
+          echo ""
+          echo "=== Version Flutter ==="
+          flutter --version
+          
+          # Nettoyer complètement le cache
+          echo ""
+          echo "=== Nettoyage complet ==="
+          flutter clean
+          rm -rf .dart_tool/
+          rm -rf build/
+          rm -f pubspec.lock
+          
+          # Corriger les dépendances problématiques
+          echo ""
+          echo "=== Correction des dépendances ==="
+          
+          # Créer une sauvegarde du pubspec original
+          cp pubspec.yaml pubspec.yaml.backup
+          
+          # Ajouter dependency_overrides si pas présent
+          if ! grep -q "dependency_overrides:" pubspec.yaml; then
+            echo "" >> pubspec.yaml
+            echo "dependency_overrides:" >> pubspec.yaml
+            echo "  collection: ^1.19.1" >> pubspec.yaml
+            echo "  material_color_utilities: ^0.11.1" >> pubspec.yaml
+            echo "  meta: ^1.15.0" >> pubspec.yaml
           fi
+          
+          echo "Pubspec.yaml modifié avec dependency_overrides:"
+          tail -10 pubspec.yaml
 
       - name: Install dependencies
-        run: flutter pub get
+        run: |
+          echo "=== Installation des dépendances ==="
+          flutter pub get --verbose
+          
+          echo ""
+          echo "=== Vérification post-installation ==="
+          flutter pub deps
+          
+          echo ""
+          echo "=== Test de compilation basique ==="
+          flutter pub run build_runner --help || echo "build_runner non disponible (normal)"
 
       - name: Validate Flutter installation
         run: |
@@ -386,13 +422,63 @@ jobs:
           echo "=== Vérification des dépendances ==="
           flutter pub deps
           echo ""
+          echo "=== Test de compilation (debug) ==="
+          # Tester une compilation debug d'abord pour identifier les problèmes
+          timeout 300s flutter build apk --debug --verbose || {
+            echo "⚠️ Build debug échoué, mais on continue..."
+            echo "Cela peut indiquer un problème de configuration Android"
+          }
+          echo ""
           echo "=== Analyse statique du code ==="
           flutter analyze --no-fatal-infos || echo "Analyse terminée avec des warnings (non bloquant)"
 
       - name: Build APK
         run: |
-          echo "=== Construction de l'APK ==="
-          flutter build apk --release --android-skip-build-dependency-validation --verbose
+          echo "=== Construction de l'APK Release ==="
+          
+          # Essayer plusieurs approches de build
+          BUILD_SUCCESS=false
+          
+          # Approche 1: Build standard avec skip validation
+          echo "Tentative 1: Build avec skip validation..."
+          if flutter build apk --release --android-skip-build-dependency-validation --verbose; then
+            BUILD_SUCCESS=true
+            echo "✅ Build réussi avec skip validation"
+          else
+            echo "❌ Build échoué avec skip validation"
+            
+            # Approche 2: Build sans skip validation
+            echo ""
+            echo "Tentative 2: Build standard..."
+            if flutter build apk --release --verbose; then
+              BUILD_SUCCESS=true
+              echo "✅ Build réussi en mode standard"
+            else
+              echo "❌ Build standard échoué"
+              
+              # Approche 3: Build avec flags de débogage
+              echo ""
+              echo "Tentative 3: Build avec flags de débogage..."
+              if flutter build apk --release --verbose --dart-define=flutter.inspector.structuredErrors=false; then
+                BUILD_SUCCESS=true
+                echo "✅ Build réussi avec flags de débogage"
+              else
+                echo "❌ Toutes les tentatives de build ont échoué"
+                
+                # Diagnostic final
+                echo ""
+                echo "=== Diagnostic final ==="
+                echo "Contenu du répertoire build:"
+                find build -type f -name "*.apk" 2>/dev/null || echo "Aucun APK trouvé"
+                
+                echo ""
+                echo "Logs Gradle (si disponibles):"
+                find . -name "*.log" -exec echo "=== {} ===" \; -exec cat {} \; 2>/dev/null || echo "Aucun log Gradle trouvé"
+                
+                exit 1
+              fi
+            fi
+          fi
           
           # Vérifier que l'APK a été créé
           if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
@@ -402,8 +488,10 @@ jobs:
             SIZE=$(wc -c < "build/app/outputs/flutter-apk/app-release.apk")
             echo "Taille de l'APK: $(echo $SIZE | numfmt --to=iec) ($SIZE bytes)"
           else
-            echo "❌ APK non trouvé"
+            echo "❌ APK non trouvé après build réussi"
+            echo "Contenu du répertoire de sortie:"
             ls -la build/app/outputs/flutter-apk/ || echo "Répertoire de sortie non trouvé"
+            find build -name "*.apk" || echo "Aucun APK trouvé dans build/"
             exit 1
           fi
 
