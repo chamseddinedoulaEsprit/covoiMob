@@ -14,24 +14,98 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      - name: Configure Android Build Environment
+        run: |
+          # Update Android Gradle Plugin and Kotlin versions
+          find android -name "*.gradle" -exec sed -i 's/com\.android\.tools\.build:gradle:[0-9]\+\.[0-9]\+\.[0-9]\+/com.android.tools.build:gradle:8.6.0/g' {} \;
+          find android -name "*.gradle" -exec sed -i 's/kotlin("[^"]*") version "[0-9]\+\.[0-9]\+\.[0-9]\+"/kotlin("android") version "2.1.0"/g' {} \;
+          
+          # Configure gradle.properties for Java compatibility
+          echo "org.gradle.jvmargs=-Dfile.encoding=UTF-8" >> android/gradle.properties
+          echo "kotlin.jvm.target.validation.mode=ignore" >> android/gradle.properties
+          
+          # Set Java compatibility in build files
+          find android -name "build.gradle" -exec sed -i 's/jvmTarget = "[0-9]\+"/jvmTarget = "1.8"/g' {} \;
+          find android -name "build.gradle" -exec sed -i 's/sourceCompatibility.*VERSION_[0-9]\+/sourceCompatibility = JavaVersion.VERSION_1_8/g' {} \;
+          find android -name "build.gradle" -exec sed -i 's/targetCompatibility.*VERSION_[0-9]\+/targetCompatibility = JavaVersion.VERSION_1_8/g' {} \;
+
+      - name: Enable Core Library Desugaring
+        run: |
+          BUILD_FILE="android/app/build.gradle"
+          if [ -f "$BUILD_FILE" ] && ! grep -q "coreLibraryDesugaringEnabled" "$BUILD_FILE"; then
+            sed -i '/compileOptions {/a\        coreLibraryDesugaringEnabled true' "$BUILD_FILE"
+            if ! grep -q "coreLibraryDesugaring" "$BUILD_FILE"; then
+              sed -i '/^dependencies {/a\    coreLibraryDesugaring '\''com.android.tools:desugar_jdk_libs:2.1.4'\''' "$BUILD_FILE"
+            fi
+          fi
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Keystore
+        run: |
+          if [ -n "${{ secrets.KEYSTORE }}" ]; then
+            echo "${{ secrets.KEYSTORE }}" | base64 --decode > android/app/upload-keystore.jks
+            cat <<EOF > android/key.properties
+          storePassword=${{ secrets.STORE_PASSWORD }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          storeFile=../app/upload-keystore.jks
+          EOF
+          else
+            keytool -genkey -v -keystore android/app/debug-keystore.jks \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -alias debugkey -storepass android -keypass android \
+              -dname "CN=Debug,OU=Debug,O=Debug,L=Debug,ST=Debug,C=US"
+            cat <<EOF > android/key.properties
+          storePassword=android
+          keyPassword=android
+          keyAlias=debugkey
+          storeFile=../app/debug-keystore.jks
+          EOF
+          fi
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.13.0'
           channel: 'stable'
           architecture: 'x64'
 
-      - name: Clear Flutter cache
-        run: flutter clean
+      - name: Prepare Flutter Project
+        run: |
+          flutter clean
+          rm -rf .dart_tool/ build/ pubspec.lock
+          
+          # Add dependency overrides if needed
+          if ! grep -q "dependency_overrides:" pubspec.yaml; then
+            echo "" >> pubspec.yaml
+            echo "dependency_overrides:" >> pubspec.yaml
+            echo "  collection: ^1.19.1" >> pubspec.yaml
+            echo "  material_color_utilities: ^0.11.1" >> pubspec.yaml
+            echo "  meta: ^1.15.0" >> pubspec.yaml
+          fi
 
       - name: Install dependencies
         run: flutter pub get
 
       - name: Build APK
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release --verbose
+          
+          # Verify APK was created
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            ls -la build/app/outputs/flutter-apk/app-release.apk
+          else
+            echo "APK not found, listing build directory contents:"
+            find build -name "*.apk" 2>/dev/null || echo "No APK files found"
+            exit 1
+          fi
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apk
+          name: app-release.apk
           path: build/app/outputs/flutter-apk/app-release.apk
