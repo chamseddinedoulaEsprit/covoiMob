@@ -1,4 +1,4 @@
-name: Build Flutter APK
+name: Build CovoiMob Flutter APK
 
 on:
   workflow_dispatch:
@@ -16,20 +16,22 @@ jobs:
 
       - name: Configure Android Build Environment
         run: |
-          # Update Android Gradle Plugin and Kotlin versions
+          # Update Android Gradle Plugin and Kotlin versions for covoiMob project
           find android -name "*.gradle" -exec sed -i 's/com\.android\.tools\.build:gradle:[0-9]\+\.[0-9]\+\.[0-9]\+/com.android.tools.build:gradle:8.6.0/g' {} \;
           find android -name "*.gradle" -exec sed -i 's/kotlin("[^"]*") version "[0-9]\+\.[0-9]\+\.[0-9]\+"/kotlin("android") version "2.1.0"/g' {} \;
           
-          # Configure gradle.properties for Java compatibility
-          echo "org.gradle.jvmargs=-Dfile.encoding=UTF-8" >> android/gradle.properties
+          # Configure gradle.properties for covoiMob compatibility
+          echo "org.gradle.jvmargs=-Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
           echo "kotlin.jvm.target.validation.mode=ignore" >> android/gradle.properties
+          echo "android.useAndroidX=true" >> android/gradle.properties
+          echo "android.enableJetifier=true" >> android/gradle.properties
           
           # Set Java compatibility in build files
           find android -name "build.gradle" -exec sed -i 's/jvmTarget = "[0-9]\+"/jvmTarget = "1.8"/g' {} \;
           find android -name "build.gradle" -exec sed -i 's/sourceCompatibility.*VERSION_[0-9]\+/sourceCompatibility = JavaVersion.VERSION_1_8/g' {} \;
           find android -name "build.gradle" -exec sed -i 's/targetCompatibility.*VERSION_[0-9]\+/targetCompatibility = JavaVersion.VERSION_1_8/g' {} \;
 
-      - name: Enable Core Library Desugaring
+      - name: Enable Core Library Desugaring for CovoiMob
         run: |
           BUILD_FILE="android/app/build.gradle"
           if [ -f "$BUILD_FILE" ] && ! grep -q "coreLibraryDesugaringEnabled" "$BUILD_FILE"; then
@@ -45,7 +47,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Keystore
+      - name: Setup Keystore for CovoiMob
         run: |
           if [ -n "${{ secrets.KEYSTORE }}" ]; then
             echo "${{ secrets.KEYSTORE }}" | base64 --decode > android/app/upload-keystore.jks
@@ -55,17 +57,20 @@ jobs:
           keyAlias=${{ secrets.KEY_ALIAS }}
           storeFile=../app/upload-keystore.jks
           EOF
+            echo "✅ Production keystore configured"
           else
+            echo "⚠️ Creating debug keystore for CovoiMob"
             keytool -genkey -v -keystore android/app/debug-keystore.jks \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -alias debugkey -storepass android -keypass android \
-              -dname "CN=Debug,OU=Debug,O=Debug,L=Debug,ST=Debug,C=US"
+              -dname "CN=CovoiMob Debug,OU=Debug,O=CovoiMob,L=Debug,ST=Debug,C=TN"
             cat <<EOF > android/key.properties
           storePassword=android
           keyPassword=android
           keyAlias=debugkey
           storeFile=../app/debug-keystore.jks
           EOF
+            echo "✅ Debug keystore created for CovoiMob"
           fi
 
       - name: Setup Flutter
@@ -74,43 +79,84 @@ jobs:
           channel: 'stable'
           architecture: 'x64'
 
-      - name: Prepare Flutter Project
+      - name: Prepare CovoiMob Flutter Project
         run: |
+          echo "🧹 Cleaning CovoiMob project..."
           flutter clean
           rm -rf .dart_tool/ build/ pubspec.lock
           
-          # Remove any existing dependency overrides and add correct ones
+          # Remove any existing dependency overrides
           if grep -q "dependency_overrides:" pubspec.yaml; then
             sed -i '/dependency_overrides:/,$d' pubspec.yaml
           fi
           
-          # Add dependency overrides that match Flutter SDK pinning and resolve conflicts
+          # Add comprehensive dependency overrides for CovoiMob project
           echo "" >> pubspec.yaml
+          echo "# CovoiMob Project Dependency Overrides" >> pubspec.yaml
           echo "dependency_overrides:" >> pubspec.yaml
+          echo "  # Flutter SDK pinned dependencies" >> pubspec.yaml
           echo "  collection: 1.19.1  # Match flutter_test SDK pinning" >> pubspec.yaml
+          echo "  intl: 0.20.2  # Match flutter_localizations SDK pinning" >> pubspec.yaml
+          echo "  # Material and meta dependencies" >> pubspec.yaml
           echo "  material_color_utilities: ^0.11.1" >> pubspec.yaml
           echo "  meta: ^1.15.0" >> pubspec.yaml
+          echo "  # Package conflicts resolution" >> pubspec.yaml
           echo "  package_info_plus: ^8.1.4  # Resolve google_api_headers conflict" >> pubspec.yaml
           echo "  google_api_headers: ^2.0.0  # Resolve flutter_google_places conflict" >> pubspec.yaml
+          echo "  # Additional common conflicts for CovoiMob" >> pubspec.yaml
+          echo "  http: ^1.2.0" >> pubspec.yaml
+          echo "  path: ^1.9.0" >> pubspec.yaml
+          
+          echo "✅ CovoiMob dependency overrides configured"
 
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build APK
+      - name: Install CovoiMob Dependencies
         run: |
-          flutter build apk --release --verbose
+          echo "📦 Installing CovoiMob dependencies..."
+          flutter pub get --verbose
+          echo "✅ Dependencies installed successfully"
+
+      - name: Validate CovoiMob Project
+        run: |
+          echo "🔍 Validating CovoiMob project..."
+          flutter doctor -v
+          flutter analyze --no-fatal-infos || echo "⚠️ Analysis completed with warnings"
+          echo "✅ CovoiMob project validation completed"
+
+      - name: Build CovoiMob APK
+        run: |
+          echo "🔨 Building CovoiMob APK..."
+          flutter build apk --release --verbose \
+            --dart-define=flutter.inspector.structuredErrors=false \
+            --split-per-abi
           
           # Verify APK was created
           if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-            ls -la build/app/outputs/flutter-apk/app-release.apk
+            echo "✅ CovoiMob APK built successfully"
+            ls -la build/app/outputs/flutter-apk/
+            # Show APK size
+            SIZE=$(wc -c < "build/app/outputs/flutter-apk/app-release.apk")
+            echo "📱 CovoiMob APK size: $(echo $SIZE | numfmt --to=iec) ($SIZE bytes)"
           else
-            echo "APK not found, listing build directory contents:"
+            echo "❌ CovoiMob APK not found"
+            echo "📁 Build directory contents:"
             find build -name "*.apk" 2>/dev/null || echo "No APK files found"
             exit 1
           fi
 
-      - name: Upload APK
+      - name: Upload CovoiMob APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release.apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: covoiMob-release-apk
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+          retention-days: 30
+
+      - name: Upload CovoiMob Build Summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: covoiMob-build-logs
+          path: |
+            android/app/build/outputs/logs/
+            build/
+          retention-days: 7
