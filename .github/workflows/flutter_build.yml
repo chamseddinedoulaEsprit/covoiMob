@@ -79,14 +79,17 @@ jobs:
           flutter clean
           rm -rf .dart_tool/ build/ pubspec.lock
           
-          # Add dependency overrides if needed
-          if ! grep -q "dependency_overrides:" pubspec.yaml; then
-            echo "" >> pubspec.yaml
-            echo "dependency_overrides:" >> pubspec.yaml
-            echo "  collection: ^1.19.1" >> pubspec.yaml
-            echo "  material_color_utilities: ^0.11.1" >> pubspec.yaml
-            echo "  meta: ^1.15.0" >> pubspec.yaml
+          # Remove any existing dependency overrides and add correct ones
+          if grep -q "dependency_overrides:" pubspec.yaml; then
+            sed -i '/dependency_overrides:/,$d' pubspec.yaml
           fi
+          
+          # Add dependency overrides that match Flutter SDK pinning
+          echo "" >> pubspec.yaml
+          echo "dependency_overrides:" >> pubspec.yaml
+          echo "  collection: 1.19.1  # Match flutter_test SDK pinning" >> pubspec.yaml
+          echo "  material_color_utilities: ^0.11.1" >> pubspec.yaml
+          echo "  meta: ^1.15.0" >> pubspec.yaml
 
       - name: Install dependencies
         run: flutter pub get
